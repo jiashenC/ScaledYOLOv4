@@ -3,6 +3,7 @@ import os
 import platform
 import shutil
 import time
+import json
 from pathlib import Path
 
 import cv2
@@ -13,13 +14,14 @@ from numpy import random
 from models.experimental import attempt_load
 from utils.datasets import LoadStreams, LoadImages
 from utils.general import (
-    check_img_size, non_max_suppression, apply_classifier, scale_coords, xyxy2xywh, plot_one_box, strip_optimizer)
+        check_img_size, non_max_suppression, apply_classifier, scale_coords, xyxy2xywh, plot_one_box, strip_optimizer)
 from utils.torch_utils import select_device, load_classifier, time_synchronized
 
 
-def detect(save_img=False):
+def detect(img_dir_path, idx=-1):
+    save_img = False
     out, source, weights, view_img, save_txt, imgsz = \
-        opt.output, opt.source, opt.weights, opt.view_img, opt.save_txt, opt.img_size
+            opt.output, opt.source, opt.weights, opt.view_img, opt.save_txt, opt.img_size
     webcam = source == '0' or source.startswith('rtsp') or source.startswith('http') or source.endswith('.txt')
 
     # Initialize
@@ -50,17 +52,31 @@ def detect(save_img=False):
         dataset = LoadStreams(source, img_size=imgsz)
     else:
         save_img = True
-        dataset = LoadImages(source, img_size=imgsz)
+        dataset = LoadImages(img_dir_path, img_size=imgsz)
 
     # Get names and colors
     names = model.module.names if hasattr(model, 'module') else model.names
     colors = [[random.randint(0, 255) for _ in range(3)] for _ in range(len(names))]
 
+    # Results
+    res = dict()
+
     # Run inference
     t0 = time.time()
     img = torch.zeros((1, 3, imgsz, imgsz), device=device)  # init img
     _ = model(img.half() if half else img) if device.type != 'cpu' else None  # run once
-    for path, img, im0s, vid_cap in dataset:
+
+    if opt.dataset == 'jackson':
+        dataset.skip(idx * 100000)
+
+    img_idx = 0
+    for i, (path, img, im0s, vid_cap) in enumerate(dataset):
+        # jackson dataset only
+        if opt.dataset == 'jackson' and img_idx == 100000:
+            break
+
+        print(path, end='')
+
         img = torch.from_numpy(img).to(device)
         img = img.half() if half else img.float()  # uint8 to fp16/32
         img /= 255.0  # 0 - 255 to 0.0 - 1.0
@@ -76,8 +92,8 @@ def detect(save_img=False):
         t2 = time_synchronized()
 
         # Apply Classifier
-        if classify:
-            pred = apply_classifier(pred, modelc, img, im0s)
+        # if classify:
+        #     pred = apply_classifier(pred, modelc, img, im0s)
 
         # Process detections
         for i, det in enumerate(pred):  # detections per image
@@ -100,48 +116,73 @@ def detect(save_img=False):
                     s += '%g %ss, ' % (n, names[int(c)])  # add to string
 
                 # Write results
+                res[img_idx] = dict()
+                res[img_idx]['class'] = []
+                res[img_idx]['score'] = []
                 for *xyxy, conf, cls in det:
-                    if save_txt:  # Write to file
-                        xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
-                        with open(txt_path + '.txt', 'a') as f:
-                            f.write(('%g ' * 5 + '\n') % (cls, *xywh))  # label format
+                    conf_v, cls_v = conf.item(), cls.item()
+                    res[img_idx]['class'] += [cls_v]
+                    res[img_idx]['score'] += [conf_v]
+                    # if save_txt:  # Write to file
+                    #     xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
+                    #     with open(txt_path + '.txt', 'a') as f:
+                    #         f.write(('%g ' * 5 + '\n') % (cls, *xywh))  # label format
 
-                    if save_img or view_img:  # Add bbox to image
-                        label = '%s' % (names[int(cls)])
-                        plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=2)
+                    # if save_img or view_img:  # Add bbox to image
+                    #     label = '%s' % (names[int(cls)])
+                    #     plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=2)
 
             # Print time (inference + NMS)
             print('%sDone. (%.3fs)' % (s, t2 - t1))
 
+        img_idx += 1
+
             # Stream results
-            if view_img:
-                cv2.imshow(p, im0)
-                if cv2.waitKey(1) == ord('q'):  # q to quit
-                    raise StopIteration
+            # if view_img:
+            #     cv2.imshow(p, im0)
+            #     if cv2.waitKey(1) == ord('q'):  # q to quit
+            #         raise StopIteration
 
             # Save results (image with detections)
-            if save_img:
-                if dataset.mode == 'images':
-                    cv2.imwrite(save_path, im0)
-                else:
-                    if vid_path != save_path:  # new video
-                        vid_path = save_path
-                        if isinstance(vid_writer, cv2.VideoWriter):
-                            vid_writer.release()  # release previous video writer
+            # if save_img:
+            #     if dataset.mode == 'images':
+            #         cv2.imwrite(save_path, im0)
+            #     else:
+            #         if vid_path != save_path:  # new video
+            #             vid_path = save_path
+            #             if isinstance(vid_writer, cv2.VideoWriter):
+            #                 vid_writer.release()  # release previous video writer
 
-                        fourcc = 'mp4v'  # output video codec
-                        fps = vid_cap.get(cv2.CAP_PROP_FPS)
-                        w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                        h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                        vid_writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*fourcc), fps, (w, h))
-                    vid_writer.write(im0)
+            #             fourcc = 'mp4v'  # output video codec
+            #             fps = vid_cap.get(cv2.CAP_PROP_FPS)
+            #             w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            #             h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            #             vid_writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*fourcc), fps, (w, h))
+            #         vid_writer.write(im0)
 
-    if save_txt or save_img:
-        print('Results saved to %s' % Path(out))
-        if platform == 'darwin' and not opt.update:  # MacOS
-            os.system('open ' + save_path)
+    # if save_txt or save_img:
+    #     print('Results saved to %s' % Path(out))
+    #     if platform == 'darwin' and not opt.update:  # MacOS
+    #         os.system('open ' + save_path)
 
     print('Done. (%.3fs)' % (time.time() - t0))
+
+    if 'p7' in opt.weights[0]:
+        save_name = 'res-4.json'
+    elif 'p6' in opt.weights[0]:
+        save_name = 'res-3.json'
+    elif 'p5' in opt.weights[0]:
+        save_name = 'res-2.json'
+    else:
+        raise Exception('Undefined model {}'.format(opt.weights))
+
+    if opt.dataset == 'jackson':
+        print(os.path.join(img_dir_path, '{}'.format(idx), save_name))
+        with open(os.path.join(img_dir_path, '{}'.format(idx), save_name), 'w') as f:
+            json.dump(res, f)
+    else:
+        with open(os.path.join(img_dir_path, save_name), 'w') as f:
+            json.dump(res, f)
 
 
 if __name__ == '__main__':
@@ -159,6 +200,9 @@ if __name__ == '__main__':
     parser.add_argument('--agnostic-nms', action='store_true', help='class-agnostic NMS')
     parser.add_argument('--augment', action='store_true', help='augmented inference')
     parser.add_argument('--update', action='store_true', help='update all models')
+
+    parser.add_argument('--dataset', required=True, help='Dataset')
+
     opt = parser.parse_args()
     print(opt)
 
@@ -168,4 +212,33 @@ if __name__ == '__main__':
                 detect()
                 strip_optimizer(opt.weights)
         else:
-            detect()
+            if opt.dataset != 'jackson':
+                if opt.dataset == 'virat':
+                    root_dir = '/data/jiashenc/virat/'
+                    for dir_path in os.listdir(root_dir):
+                        img_dir_path = os.path.join(root_dir, dir_path)
+                        if os.path.isfile(img_dir_path) or 'VIRAT' not in img_dir_path:
+                            continue
+                        detect(img_dir_path)
+
+                elif opt.dataset == 'bdd':
+                    root_dir = '/data/jiashenc/bdd/bdd100k/videos/test'
+                    for dir_path in os.listdir(root_dir):
+                        img_dir_path = os.path.join(root_dir, dir_path)
+                        if os.path.isfile(img_dir_path):
+                            continue
+                        detect(img_dir_path)
+
+                elif opt.dataset == 'ua-detrac':
+                    root_dir = '/data/jiashenc/ua_detrac/test'
+                    for dir_path in os.listdir(root_dir):
+                        img_dir_path = os.path.join(root_dir, dir_path)
+                        if os.path.isfile(img_dir_path):
+                            continue
+                        detect(img_dir_path)
+
+            else:
+                root_dir = '/data/jiashenc/jackson'
+                for i in range(0, 11):
+                    detect(root_dir, i)
+
