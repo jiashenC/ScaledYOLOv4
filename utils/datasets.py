@@ -28,8 +28,8 @@ from utils.torch_utils import torch_distributed_zero_first
 
 # Parameters
 help_url = 'https://github.com/ultralytics/yolov5/wiki/Train-Custom-Data'
-img_formats = ['bmp', 'jpg', 'jpeg', 'png', 'tif', 'tiff', 'dng']  # acceptable image suffixes
-vid_formats = ['mov', 'avi', 'mp4', 'mpg', 'mpeg', 'm4v', 'wmv', 'mkv']  # acceptable video suffixes
+img_formats = ['.bmp', '.jpg', '.jpeg', '.png', '.tif', '.tiff', '.dng']
+vid_formats = ['.mov', '.avi', '.mp4', '.mpg', '.mpeg', '.m4v', '.wmv', '.mkv']
 
 # Get orientation exif tag
 for orientation in ExifTags.TAGS.keys():
@@ -146,16 +146,27 @@ class LoadImages:  # for inference
         p = str(Path(path))  # os-agnostic
         p = os.path.abspath(p)  # absolute path
         if '*' in p:
-            files = sorted(glob.glob(p, recursive=True))  # glob
+            files = sorted(glob.glob(p))  # glob
         elif os.path.isdir(p):
-            files = sorted(glob.glob(os.path.join(p, '*.*')))  # dir
+            if 'ua_detrac' in path:
+                files = sorted(glob.glob(os.path.join(p, '*.jpg')))  # dir
+            elif 'jackson' in path:
+                files = [os.path.join(path, 'frame{}.jpg'.format(i))
+                         for i in range(0, 1100000)]
+            else:
+                files_count = len(glob.glob(os.path.join(p, '*.jpg')))
+                files = [os.path.join(path, 'frame{}.jpg'.format(i))
+                         for i in range(files_count)]
         elif os.path.isfile(p):
             files = [p]  # files
         else:
             raise Exception('ERROR: %s does not exist' % p)
 
-        images = [x for x in files if x.split('.')[-1].lower() in img_formats]
-        videos = [x for x in files if x.split('.')[-1].lower() in vid_formats]
+        images = [x for x in files if os.path.splitext(
+            x)[-1].lower() in img_formats]
+        print(len(images))
+        videos = [x for x in files if os.path.splitext(
+            x)[-1].lower() in vid_formats]
         ni, nv = len(images), len(videos)
 
         self.img_size = img_size
@@ -171,8 +182,9 @@ class LoadImages:  # for inference
         assert self.nf > 0, 'No images or videos found in %s. Supported formats are:\nimages: %s\nvideos: %s' % \
                             (p, img_formats, vid_formats)
 
-    def __iter__(self):
         self.count = 0
+
+    def __iter__(self):
         return self
 
     def __next__(self):
@@ -195,14 +207,14 @@ class LoadImages:  # for inference
                     ret_val, img0 = self.cap.read()
 
             self.frame += 1
-            print('video %g/%g (%g/%g) %s: ' % (self.count + 1, self.nf, self.frame, self.nframes, path), end='')
+            # print('video %g/%g (%g/%g) %s: ' % (self.count + 1, self.nf, self.frame, self.nframes, path), end='')
 
         else:
             # Read image
             self.count += 1
             img0 = cv2.imread(path)  # BGR
             assert img0 is not None, 'Image Not Found ' + path
-            print('image %g/%g %s: ' % (self.count, self.nf, path), end='')
+            # print('image %g/%g %s: ' % (self.count, self.nf, path), end='')
 
         # Padded resize
         img = letterbox(img0, new_shape=self.img_size, auto_size=self.auto_size)[0]
@@ -211,6 +223,7 @@ class LoadImages:  # for inference
         img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to 3x416x416
         img = np.ascontiguousarray(img)
 
+        # cv2.imwrite(path + '.letterbox.jpg', 255 * img.transpose((1, 2, 0))[:, :, ::-1])  # save letterbox image
         return path, img, img0, self.cap
 
     def new_video(self, path):
@@ -220,6 +233,9 @@ class LoadImages:  # for inference
 
     def __len__(self):
         return self.nf  # number of files
+
+    def skip(self, n):
+        self.count += n
 
 
 class LoadWebcam:  # for inference
